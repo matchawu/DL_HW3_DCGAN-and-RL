@@ -24,7 +24,7 @@ import random
 import argparse
 import numpy as np
 from collections import namedtuple
-
+import sys
 import cv2
 from PIL import Image
 import matplotlib
@@ -41,23 +41,24 @@ print("Use device: %s"%device)
 # Please tune the hyperparameters
 parser = argparse.ArgumentParser()
 parser.add_argument("--train_ep", default=800, type=int)
-parser.add_argument("--mem_capacity", default=90000, type=int) # In paper, size is 1000000
-parser.add_argument("--batch_size", default=128, type=int) # 16 32 64 128
-parser.add_argument("--lr", default=0.0003, type=float) # ~0.0001 ~0.001
-parser.add_argument("--gamma", default=0.999, type=float) # 0.8 0.9 0.99 0.999
+parser.add_argument("--mem_capacity", default=65000, type=int)
+parser.add_argument("--batch_size", default=128, type=int)
+parser.add_argument("--lr", default=0.00025, type=float)
+parser.add_argument("--gamma", default=0.999, type=float)
 parser.add_argument("--epsilon_start", default=1.0, type=float)
-parser.add_argument("--epsilon_final", default=0.1, type=float) # Try 0.05?
-parser.add_argument("--epsilon_decay", default=1000000, type=float) # 500000 1000000 4000000 
-parser.add_argument("--target_step", default=10000, type=int) # ?
+parser.add_argument("--epsilon_final", default=0.1, type=float)
+parser.add_argument("--epsilon_decay", default=1000000, type=float)
+parser.add_argument("--target_step", default=10000, type=int)
 parser.add_argument("--eval_per_ep", default=10, type=int)
 parser.add_argument("--save_per_ep", default=50, type=int)
 parser.add_argument("--save_dir", default="./HW3/model")
-parser.add_argument("--log_file", default="./HW3/log.txt") # you can plot the figure accroding to the file
+parser.add_argument("--log_file", default="./HW3/log.txt")
 parser.add_argument("--load_model", default=None)
 parser.add_argument("--train", default=True, type=bool)
 
-
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward', 'done'))
+
+os.makedirs("./HW3", exist_ok=True)
 
 class ReplayMemory(object):
     def __init__(self, capacity):
@@ -73,7 +74,6 @@ class ReplayMemory(object):
         
 
     def sample(self, batch_size):
-        assert False, "You should check the source code for your homework!!" # Sample when you are training
         return random.sample(self.memory, batch_size)
     
     def __len__(self):
@@ -89,7 +89,6 @@ class CNN(nn.Module):
         self.bn2 = nn.BatchNorm2d(64)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
         self.bn3 = nn.BatchNorm2d(64)
-        assert False, "You should check the source code for your homework!!" # In original paper, there is no batch normalization and leaky relu.
         
         def conv2d_size_out(size, kernel_size = 3, stride = 1):
             return (size - (kernel_size - 1) - 1) // stride  + 1
@@ -107,7 +106,7 @@ class CNN(nn.Module):
         x = F.leaky_relu(self.fc(x.view(x.size(0), -1)))
         return self.head(x)
 
-
+actions = ["NOOP", "UP", "DOWN"]
 class DQN(object):
     def __init__(self):
         self.BATCH_SIZE = args.batch_size
@@ -116,14 +115,15 @@ class DQN(object):
         self.EPS_END = args.epsilon_final
         self.EPS_DECAY = args.epsilon_decay
         self.LEARN_RATE = args.lr
+        self.TARGET_UPDATE = args.target_step
 
         self.action_dim = 3
         self.state_dim = (84,84)
         self.epsilon = 0.0
         self.update_count = 0
         
-        self.policy_net = CNN(84, 84, self.action_dim).to(device)
-        self.target_net = CNN(84, 84, self.action_dim).to(device)
+        self.policy_net = CNN(self.state_dim[0], self.state_dim[1], self.action_dim).to(device)
+        self.target_net = CNN(self.state_dim[0], self.state_dim[1], self.action_dim).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         self.optimizer = optim.RMSprop(self.policy_net.parameters(), lr=self.LEARN_RATE)
@@ -133,20 +133,26 @@ class DQN(object):
 
     def select_action(self, state):
         self.interaction_steps += 1
-        self.epsilon = self.EPS_END + np.maximum( (self.EPS_START-self.EPS_END) * (1 - self.interaction_steps/self.EPS_DECAY), 0) # linear decay
+        self.epsilon = self.EPS_END + np.maximum( (self.EPS_START-self.EPS_END) * (1 - self.interaction_steps/self.EPS_DECAY), 0)
         if random.random() < self.epsilon:
-            assert False, "You should check the source code for your homework!!" # random select for epsilon greedy (Dependent on the exploration probability)
-            return torch.tensor( [random.sample([0,1,2],1)], device=device, dtype=torch.long ) #torch.tensor([[random.randrange(self.action_dim)]], device=device, dtype=torch.long)
+            return torch.tensor([[np.random.choice(np.arange(0, 3), p=[0.3, 0.6, 0.1])]], device=device, dtype=torch.long)
         else:
             with torch.no_grad():
                 return self.policy_net(state).max(1)[1].view(1, 1)
 
     def evaluate_action(self, state, rand=0.1):
         if random.random() < rand:
-            assert False, "You should check the source code for your homework!!" # random select for evaluate action should be the final epsilon in training
-            return torch.tensor( [random.sample([0,1,2],1)], device=device, dtype=torch.long )
+            return torch.tensor([[np.random.choice(np.arange(0, 3), p=[0.3, 0.6, 0.1])]], device=device, dtype=torch.long)
         with torch.no_grad():
-            return self.target_net(state).max(1)[1].view(1, 1)
+            t = self.target_net(state)
+            
+            # trace and sample state
+            print_string = "Q-value: "+ str(t.cpu().numpy()[0]) + \
+            ", agent's choice: " + str(actions[t.max(1)[1].view(1, 1).cpu().numpy()[0][0]]) + \
+            ", mean: " + str(np.mean(t.cpu().numpy()[0]))
+            print(print_string)
+            
+            return t.max(1)[1].view(1, 1)
 
 
     def store(self, state, action, next_state, reward, done):
@@ -166,34 +172,29 @@ class DQN(object):
         action_batch = torch.cat(batch.action)
         reward_batch = torch.cat(batch.reward)
         
-        # calculate 
-        # the
-        # loss
-        # function
-        # here
-        # and
-        # backward
-        #loss = 0
-        assert False, "You should check the source code for your homework!!" # please check these pytorch and do regression problem
-        #self.optimizer.zero_grad()
-        #loss.backward()
-        #for param in self.policy_net.parameters():
-        #    param.grad.data.clamp_(-1, 1)
-        #self.optimizer.step()
+        state_action_values = self.policy_net(state_batch).gather(1, action_batch)
+        
+        next_state_values = torch.zeros(self.BATCH_SIZE,1, device=device)
+        next_state_values[final_mask.bitwise_not()] = self.target_net(non_final_next_states).max(1, True)[0].detach()
+
+        expected_state_action_values = (next_state_values * self.GAMMA) + reward_batch
+    
+        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values)
+        
+        self.optimizer.zero_grad()
+        loss.backward()
+        for param in self.policy_net.parameters():
+            param.grad.data.clamp_(-1, 1)
+        self.optimizer.step()
 
         self.update_count += 1
-        if self.update_count % args.target_step == 0:
+        if self.update_count % self.TARGET_UPDATE == 0:
             self.update_target_net()
 
         
     def update_target_net(self):
         with torch.no_grad():
-            assert False, "You should check the source code for your homework!!" # why need to do this function? Which update is better?
             self.target_net.load_state_dict(self.policy_net.state_dict())
-            #for q, q_targ in zip(self.policy_net.parameters(), self.target_net.parameters()):
-            #    q_targ.data.mul_(0.05)
-            #    q_targ.data.add_(0.95 * q.data)
-            #self.target_net.eval()
 
     def save_model(self, path="."):
         torch.save(self.target_net.state_dict(), path+'/q_target_checkpoint_{}.pth'.format(self.interaction_steps))
@@ -212,10 +213,11 @@ class RandomAgent(object):
 
     def select_action(self, state):
         self.interaction_steps += 1
-        return torch.tensor( [random.sample([0,1,2],1)], device=device, dtype=torch.long ) # random.sample([0,0,0,1,1,1,1,1,1,2],1)
+        return torch.tensor( [np.random.choice(np.arange(0, 3), p=[0.3, 0.6, 0.1])], device=device, dtype=torch.long )
 
     def evaluate_action(self, state):
-        return torch.tensor( [random.sample([0,1,2],1)], device=device, dtype=torch.long )
+        return torch.tensor( [np.random.choice(np.arange(0, 3), p=[0.3, 0.6, 0.1])], device=device, dtype=torch.long )
+
 
 frame_proc = T.Compose([T.ToPILImage(),
                         T.Grayscale(), \
@@ -244,10 +246,9 @@ class Atari(object):
         self.state = next_state
         return next_state, reward, done, info
 
-    def render(self):
+    def get_render(self):
         observation = self.env.render(mode='rgb_array')
         return observation
-
 
 def main():
     num_episodes = args.train_ep
@@ -259,24 +260,24 @@ def main():
     env = Atari()
 
     if args.load_model:
-      agent.restore_model(args.load_model)
+        agent.restore_model(args.load_model)
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
     
     global_steps = 0
+    reward_box = []
     for i_episode in range(num_episodes):
         episode_reward = 0
         state = env.reset()
 
         for _ in range(10000):
-            #env.render()
+#             env.env.render()
             action = agent.select_action(state)
             next_state, reward, done, _ = env.step(action.item())
             
             if done:
                 next_state = None
 
-            assert False, "You should check the source code for your homework!!" # Here put the transition data on device you want and may convert when update
             agent.memory.push(  state, \
                                 action, \
                                 next_state, \
@@ -291,6 +292,7 @@ def main():
 
             if done:
                 print("Episode: %6d, interaction_steps: %6d, reward: %2d, epsilon: %f"%(i_episode+1, agent.interaction_steps, episode_reward, agent.epsilon))
+                reward_box.append(episode_reward)
                 log_fd.write("Episode: %6d, interaction_steps: %6d, reward: %2d, epsilon: %f\n"%(i_episode+1, agent.interaction_steps, episode_reward, agent.epsilon))
                 break
 
@@ -316,39 +318,65 @@ def main():
             log_fd.write("Evaluation: True, episode: %6d, interaction_steps: %6d, evaluate reward: %2d"%(i_episode+1, agent.interaction_steps, average_reward/test_times))
     
     log_fd.close()
+    plt.figure(figsize=(10,5))
+    plt.title("DQN episode total reward")
+    plt.plot(reward_box)
+    plt.xlabel("episode")
+    plt.ylabel("reward")
+    plt.savefig('HW3/training_reward.png')
+    plt.show()
 
-def test():
-    agent = DQN() # agent = RandomAgent()
+def test(path):
+    agent = DQN()
     env = Atari()
     test_epsilon = args.epsilon_final
     
-    if args.load_model:
-        agent.restore_model(args.load_model)
-    else:
-        test_epsilon = 1.0
+#     if args.load_model:
+#         agent.restore_model(args.load_model)
+#     else:
+#         test_epsilon = 1.0
+    agent.restore_model(path)
       
-
-    for i_episode in range(10):
+    reward_box = []
+    for i_episode in range(200):
         episode_reward = 0
         state = env.reset()
 
         for _ in range(10000):
-            env.env.render() # For Desktop window
+            env.env.render() # show atari playing screen
             action = agent.evaluate_action(state, test_epsilon)
+            
+            sys.stdin.readline() # wait until keyboard action for saving screenshots
+            
             next_state, reward, done, _ = env.step(action.item())
             state = next_state
             episode_reward += reward
 
             if done:
                 print("Episode: %6d, interaction_steps: %6d, reward: %2d, epsilon: %f"%(i_episode, agent.interaction_steps, episode_reward, test_epsilon))
+                reward_box.append(episode_reward)
                 break
+    reward_np = np.array(reward_box)
+    print("mean: ", np.mean(reward_np))
+    print("std: ", np.std(reward_np))
+    plt.figure(figsize=(10,5))
+    plt.title("DQN episode test reward")
+    plt.plot(reward_box)
+    plt.xlabel("episode")
+    plt.ylabel("reward")
+    plt.savefig('HW3/testing_reward.png')
+    plt.show()
 
 if __name__ == "__main__":
-    args = parser.parse_args()  #F or Terminal
-    #args = parser.parse_args(args=[]) # For jupyter notebook
-    assert False, "You should check the source code for your homework!!" # Before you run function, please check hyperparameters again!!
+    args = parser.parse_args()
+    # run test
+    # python DQN.py --train=False --load_model=HW3/model/q_target_checkpoint_1538048.pth
+    # run train
+    # python DQN.py
     if args.train:
         main()
     else:
-        test()
+        # test()
+        test('./q_target_checkpoint_1538048.pth')
+    
 
