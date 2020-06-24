@@ -280,7 +280,7 @@ def main(args):
 
     # Setup optimizers for both G and D and setup criterion at the same time
     optimizer_g = optim.Adam(G.parameters(), lr=args.lr, betas=(0.5, 0.999))
-    optimizer_d = optim.Adam(D.parameters(), lr=args.lr*2, betas=(0.5, 0.999))
+    optimizer_d = optim.Adam(D.parameters(), lr=args.lr, betas=(0.5, 0.999))
     criterion = nn.BCELoss()
     
     
